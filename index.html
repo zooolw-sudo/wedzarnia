@@ -894,7 +894,7 @@ function calPoint(t){
 $$('[data-cal]').forEach(function(b){ b.onclick = function(){ calPoint(+b.getAttribute('data-cal')); }; });
 $('#btnCalT').onclick = function(){ var t = parseFloat(String($('#calT').value).replace(',', '.')); if (isNaN(t) || t < -5 || t > 150){ $('#calMsg').textContent = 'Wpisz temperaturę od −5 do 150 °C.'; return; } calPoint(t); };
 $('#btnCalReset').onclick = function(){
-  confirmBox('Przywrócić kalibrację fabryczną?', 'Wszystkie sondy wrócą do krzywej 100 kΩ / B 3950.', 'Przywróć', 'bad').then(function(ok){
+  confirmBox('Przywrócić kalibrację fabryczną?', 'Wszystkie sondy wrócą do krzywej domyślnej (NTC 10 kΩ, B 3435).', 'Przywróć', 'bad').then(function(ok){
     if (ok) api('/api/cal?reset=1').then(function(r){ $('#calMsg').textContent = r.msg; loadCal(); }, function(){});
   });
 };

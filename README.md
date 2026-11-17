@@ -2,7 +2,7 @@
 
 Sterownik wędzarni na ESP32 i aplikacja na tablet z Androidem:
 
-- 4 sondy mięsa i 1 sonda komory (NTC, np. Sonoff MPS01),
+- 4 sondy mięsa i 1 sonda komory (NTC 10 kΩ / B 3435, np. sondy zgodne z ThermoPro),
 - regulacja temperatury komory grzałką 230 V przez przekaźnik SSR,
 - automatyczny koniec: gdy mięso dojdzie do zadanej temperatury, ESP32 wyłącza grzałkę, a tablet daje alarm,
 - podgląd na żywo, wykres z całego procesu (do 12 h), szacowany czas dojścia do celu.
@@ -17,9 +17,9 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 | Część | Ilość | Uwagi |
 |---|---|---|
 | ESP32 DevKit (WROOM-32, 38 pin) | 1 | przy słabym WiFi przy wędzarni: wersja WROOM-32U z anteną zewnętrzną |
-| Sonda Sonoff MPS01 | 5 | sprzedawane po 2 szt. |
+| Sonda NTC 10 kΩ / B 3435 (zgodna z ThermoPro) | 5 | wtyk jack, przewód w oplocie stalowym |
 | Gniazdo jack do sondy | 5 | dopasuj średnicę do wtyku sondy |
-| Rezystor 47 kΩ 1% | 5 | patrz „Dobór rezystora” |
+| Rezystor 4,7 kΩ 1% | 5 | patrz „Dobór rezystora” |
 | Kondensator 100 nF | 5 | |
 | Tranzystor BC547 (albo 2N2222) | 1 | |
 | Rezystory 1 kΩ i 10 kΩ | po 1 | sterownik SSR |
@@ -46,7 +46,7 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 | Sterownik SSR | GPIO26 |
 | Zasilanie | VIN (5 V), GND |
 
-**Kanał sondy (5×):** 3V3 → 47 kΩ → pin ESP32 → sonda → GND, kondensator 100 nF między pinem a GND.
+**Kanał sondy (5×):** 3V3 → 4,7 kΩ → pin ESP32 → sonda → GND, kondensator 100 nF między pinem a GND.
 
 **Sterownik SSR:** GPIO26 → 1 kΩ → baza BC547, 10 kΩ baza–GND (grzałka zostaje wyłączona przy starcie ESP32), emiter → GND, kolektor → SSR 4 (−), SSR 3 (+) → 5 V.
 
@@ -58,8 +58,8 @@ Termik jest konieczny. Uszkodzony SSR zwykle zwiera na stałe, a wtedy tylko ter
 
 Zmierz multimetrem rezystancję sondy w temperaturze pokojowej:
 
-- ok. 100 kΩ → 47 kΩ (domyślnie),
-- ok. 1 MΩ → 470 kΩ i zmień `R_FIX` w programie,
+- ok. 10 kΩ (12 kΩ w 20 °C) → 4,7 kΩ (domyślnie),
+- ok. 100 kΩ → 47 kΩ, ok. 1 MΩ → 470 kΩ; zmień wtedy `R_FIX`, `NTC_R25` i `NTC_BETA` w programie,
 - kilka Ω → to termopara, ten układ się nie nada.
 
 Zasada: rezystor ≈ połowa rezystancji sondy w 25 °C. Wtedy pomiar działa od zimnego mięsa z lodówki do ok. 130 °C w komorze.

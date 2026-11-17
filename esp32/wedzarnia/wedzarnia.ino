@@ -1,13 +1,13 @@
 /*
   WĘDZARNIA ESP32
-  Sterownik wędzarni: 4 sondy mięsa + sonda komory (NTC, np. Sonoff MPS01),
+  Sterownik wędzarni: 4 sondy mięsa + sonda komory (NTC 10 kΩ, B 3435, np. sondy zgodne z ThermoPro),
   grzałka 230 V przez przekaźnik SSR, dane i sterowanie przez WiFi
   (aplikacja „Wędzarnia” na tablecie albo przeglądarka).
 
   Podłączenie (schemat w README):
     S1..S4 (mięso) -> GPIO32, GPIO33, GPIO34, GPIO35
     K (komora)     -> GPIO36 (VP)
-    każdy kanał:   3V3 -> 47 kΩ -> pin -> sonda -> GND, 100 nF pin–GND
+    każdy kanał:   3V3 -> 4,7 kΩ -> pin -> sonda -> GND, 100 nF pin–GND
     SSR            -> GPIO26 -> 1 kΩ -> baza BC547 (10 kΩ baza–GND), kolektor -> SSR 4−, SSR 3+ -> 5V
 
   Biblioteki: tylko wbudowane w pakiet ESP32 (WiFi, WebServer, ESPmDNS, Preferences).
@@ -36,7 +36,10 @@ static const uint8_t PIN_HEATER = 26;   // wejście sterownika SSR (stan wysoki 
 static const uint8_t PIN_LED = 2;       // dioda na płytce: świeci = grzałka ON, miga = brak WiFi
 static const uint8_t PIN_BOOT = 0;      // przycisk BOOT: przytrzymaj 5 s = konfiguracja WiFi od nowa
 
-static const float R_FIX = 47000.0f;    // rezystor dzielnika (ok. połowa rezystancji sondy w 25 °C)
+static const float R_FIX = 4700.0f;     // rezystor dzielnika (ok. połowa rezystancji sondy w 25 °C)
+// domyślna krzywa sondy przed kalibracją: NTC 10 kΩ w 25 °C, B = 3435
+static const float NTC_R25 = 10000.0f;
+static const float NTC_BETA = 3435.0f;
 static const float VCC = 3.30f;         // napięcie zasilania dzielnika
 
 // ================== SIEĆ ==================
@@ -64,7 +67,7 @@ struct Probe {
   uint8_t err = 1;      // 0 OK, 1 brak sondy, 2 zwarcie, 3 poza zakresem
   uint8_t badCnt = 0;   // kolejne złe odczyty (odporność na zakłócenia)
   // kalibracja: krzywa beta przechodząca przez punkt (tref, rref)
-  float tref = 25.0f, rref = 100000.0f, beta = 3950.0f;
+  float tref = 25.0f, rref = NTC_R25, beta = NTC_BETA;
   float c1t = NAN, c1r = NAN;  // pierwszy punkt kalibracji (do wyliczenia beta z drugiego)
 };
 Probe pr[NP];
@@ -474,7 +477,7 @@ static void handleSet() {
 static void handleCal() {
   if (server.hasArg("reset")) {
     for (int i = 0; i < NP; i++) {
-      pr[i].tref = 25; pr[i].rref = 100000; pr[i].beta = 3950; pr[i].c1t = NAN; pr[i].c1r = NAN;
+      pr[i].tref = 25; pr[i].rref = NTC_R25; pr[i].beta = NTC_BETA; pr[i].c1t = NAN; pr[i].c1r = NAN;
     }
     saveCal();
     sendResult(true, "Kalibracja przywrócona do ustawień fabrycznych");
