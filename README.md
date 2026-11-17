@@ -30,6 +30,10 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 
 ## Podłączenie
 
+![Schemat 1: sondy, ESP32 i sterowanie SSR](docs/schemat-1-sondy-esp32-ssr.png)
+
+![Schemat 2: obwód 230 V grzałki](docs/schemat-2-obwod-230v.png)
+
 | Element | Pin ESP32 |
 |---|---|
 | S1 (mięso) | GPIO32 |
