@@ -83,7 +83,7 @@ Każda sonda dostaje własną krzywą. Zamiast 0/100 °C możesz wpisać tempera
 - **START:** grzałka włącza się, gdy komora spadnie poniżej zadanej − ½ histerezy, i wyłącza powyżej zadanej + ½ histerezy. Między włączeniami jest co najmniej 10 s przerwy.
 - **Cel sondy:** sonda z celem „—” służy tylko do podglądu. Sonda podłączona w trakcie wędzenia też się liczy.
 - **Koniec:** gdy wszystkie sondy z celem dojdą (albo dowolna, do wyboru w ustawieniach). Grzałka OFF, alarm na tablecie.
-- **Zabezpieczenia:** przegrzanie komory (domyślnie 140 °C), brak odczytu komory przez 5 min, maksymalny czas (domyślnie 12 h). Bez odczytu komory grzałka jest zawsze wyłączona. Po restarcie ESP32 wędzenie nie wznawia się samo.
+- **Zabezpieczenia:** przegrzanie komory (domyślnie 140 °C), brak odczytu komory przez 5 min, grzałka pracuje 20 min bez przerwy, a komora stoi daleko poniżej zadanej (sonda komory wypadła?), maksymalny czas (domyślnie 12 h). Zawieszony program restartuje watchdog. Bez odczytu komory grzałka jest zawsze wyłączona. Po restarcie ESP32 wędzenie nie wznawia się samo.
 
 ## API (dla ciekawych)
 

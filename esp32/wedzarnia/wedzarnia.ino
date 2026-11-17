@@ -16,6 +16,8 @@
   Bezpieczeństwo:
   - grzałka działa tylko w trakcie wędzenia (START) i tylko przy poprawnym odczycie komory,
   - przegrzanie komory, brak sondy komory przez 5 min, maks. czas -> grzałka OFF,
+  - grzałka pracuje 20 min bez przerwy, a komora nie rośnie -> awaria (sonda komory poza komorą?),
+  - zawieszony program -> watchdog restartuje ESP32,
   - po restarcie ESP32 proces NIE wznawia się sam (grzałka zostaje wyłączona),
   - sterowanie odbywa się w ESP32: utrata WiFi albo wyłączony tablet nie przerywa procesu,
   - termik NC w obwodzie 230 V jest i tak konieczny (zabezpieczenie niezależne od elektroniki).
@@ -45,6 +47,8 @@ static const char *AP_PASS = "wedzarnia";
 // ================== REGULACJA ==================
 static const uint16_t MIN_ON_GAP_S = 10;     // najkrótsza przerwa przed ponownym włączeniem grzałki
 static const uint16_t K_FAULT_LIMIT_S = 300; // brak odczytu komory dłużej niż 5 min = przerwanie
+static const uint16_t NO_RISE_LIMIT_S = 1200; // grzałka pracuje 20 min bez przerwy, a komora nie rośnie = awaria
+static const float NO_RISE_MIN_C = 2.0f;      // …o co najmniej tyle stopni
 static const int HIST_N = 720;               // historia: 720 punktów co minutę = 12 h
 
 #define NP 5   // liczba sond
@@ -86,6 +90,8 @@ uint32_t runEndSec = 0;      // czas trwania zakończonego procesu
 bool req[4] = {false, false, false, false};  // sondy, na które czekamy
 bool hit[4] = {false, false, false, false};  // sondy, które doszły do celu
 uint16_t kBadSec = 0;
+uint32_t heatOnSince = 0;     // od kiedy grzałka pracuje bez przerwy
+float heatOnTemp = NAN;       // temperatura komory w chwili włączenia
 uint32_t evNo = 0;
 char evTxt[112] = "";
 
@@ -107,6 +113,7 @@ static void setHeater(bool on) {
   heater = on;
   digitalWrite(PIN_HEATER, on ? HIGH : LOW);
   if (!on) lastOnMs = millis();
+  else { heatOnSince = millis(); heatOnTemp = pr[KI].t; }
 }
 
 static void event(const char *fmt, ...) {
@@ -304,6 +311,17 @@ static void control1s() {
 
   // regulacja komory z histerezą
   if (k.err != 0) { setHeater(false); return; }
+
+  // grzałka grzeje długo, a komora stoi daleko poniżej zadanej: sonda komory wypadła na zewnątrz
+  // albo grzałka nie działa
+  if (heater && millis() - heatOnSince >= NO_RISE_LIMIT_S * 1000UL) {
+    if (k.t < cfg.kSet - 15.0f && !(k.t - heatOnTemp >= NO_RISE_MIN_C)) {
+      finish(ST_FAULT, "Grzałka pracuje 20 min, a komora się nie nagrzewa – sprawdź sondę komory i grzałkę");
+      return;
+    }
+    heatOnSince = millis(); heatOnTemp = k.t;   // sprawdzamy kolejne 20 min
+  }
+
   float lo = cfg.kSet - cfg.hyst / 2.0f, hi = cfg.kSet + cfg.hyst / 2.0f;
   if (heater && k.t >= hi) setHeater(false);
   else if (!heater && k.t <= lo && millis() - lastOnMs >= MIN_ON_GAP_S * 1000UL) setHeater(true);
@@ -570,7 +588,9 @@ static void handleWifiPage() {
   h += "<p class='m'>Obecnie: ";
   h += staOk ? ("połączono z „" + htmlEsc(wifiSsid) + "”, IP " + WiFi.localIP().toString()) : String("brak połączenia z domowym WiFi");
   h += F("</p><form method='post' action='/wifi'><label>Sieć</label><select name='s' onchange=\"document.getElementById('o').value=this.value\">");
-  int n = WiFi.scanNetworks();
+  feedLoopWDT();
+  int n = WiFi.scanNetworks(false, false, false, 150);
+  feedLoopWDT();
   for (int i = 0; i < n && i < 20; i++) {
     String s = htmlEsc(WiFi.SSID(i));
     h += "<option value=\"" + s + "\">" + s + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
@@ -693,6 +713,8 @@ void setup() {
   server.on("/wifi", HTTP_POST, handleWifiSave);
   server.onNotFound(handleNotFound);
   server.begin();
+
+  enableLoopWDT();   // zawieszony program = restart ESP32 (a po restarcie grzałka jest wyłączona)
 }
 
 void loop() {
