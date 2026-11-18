@@ -78,6 +78,11 @@ button:focus{outline:none}
 .chip.state[data-st="run"]{color:var(--ok);border-color:var(--ok)}
 .chip.state[data-st="done"]{color:var(--ok);border-color:var(--ok);background:rgba(60,207,123,.12)}
 .chip.state[data-st="fault"]{color:var(--bad);border-color:var(--bad);background:rgba(255,107,94,.12)}
+.chip.bat{grid-gap:.4rem;gap:.4rem}
+.chip.bat svg{display:block;width:1.75em;height:.95em}
+.chip.bat[data-s="low"]{color:var(--warn);border-color:var(--warn)}
+.chip.bat[data-s="crit"]{color:var(--bad);border-color:var(--bad);background:rgba(255,107,94,.12)}
+.chip.bat[data-s="crit"] svg{animation:blink 1s steps(2) infinite}
 .btn-icon{position:relative;width:2.6rem;height:2.6rem;border-radius:50%;border:1px solid var(--line);background:transparent;padding:0}
 .btn-icon svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:1.3rem;height:1.3rem;fill:currentColor}
 
@@ -112,6 +117,7 @@ button:focus{outline:none}
 .main-btn.stop{background:var(--bad);color:#2a0805}
 .main-btn.ack{background:var(--accent);color:#2a1702}
 .main-btn:disabled{opacity:.45}
+.btn:disabled,.inp:disabled{opacity:.4}
 
 /* sondy */
 .probes{grid-area:pr;display:grid;grid-template-columns:1fr 1fr;grid-gap:14px;gap:14px}
@@ -217,6 +223,12 @@ button:focus{outline:none}
   .k-temp{font-size:5.2rem}
   .brand,.clock{font-size:1.5rem}
   .top-right .chip.conn span.t{display:none}
+  .top{grid-gap:8px;gap:8px}
+  .top-right{grid-gap:.4rem;gap:.4rem}
+  .top-right .chip{padding:.3rem .55rem;letter-spacing:.04em}
+  .btn-icon{width:2.3rem;height:2.3rem}
+  .app.has-bat .brand{display:none}
+  .app.has-bat .clock{margin-left:0;color:var(--ink)}
   .heat-txt{font-size:1.15rem}
 }
 </style>
@@ -227,6 +239,7 @@ button:focus{outline:none}
     <div class="top-left"><h1 class="brand">Wędzarnia</h1><span class="clock num" id="clock">--:--</span></div>
     <div class="top-right">
       <span class="chip state" id="stateChip" data-st="idle"><span class="t">Czeka</span></span>
+      <span class="chip bat" id="bat" data-s="ok" hidden title="Akumulator"><svg viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="1" width="21" height="12" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="23" y="4.5" width="2.2" height="5" rx="1" fill="currentColor"/><rect id="batFill" x="3.2" y="3.2" width="16.6" height="7.6" rx="1.2" fill="currentColor"/></svg><span class="t num" id="batTxt">--%</span></span>
       <span class="chip conn" id="conn" data-s="wait"><span class="led"></span><span class="t">Szukam sterownika…</span></span>
       <button class="btn-icon" id="btnGear" aria-label="Ustawienia"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
     </div>
@@ -290,6 +303,12 @@ button:focus{outline:none}
       <button class="btn" id="btnCalReset">Przywróć fabryczną</button>
     </div>
     <p class="note" id="calMsg"></p>
+
+    <h3>Akumulator</h3>
+    <div class="row"><div>Poziom naładowania<small id="batInfo">—</small></div><b class="num" id="batSetVal">—</b></div>
+    <div class="row"><div>Kalibracja napięcia<small>Zmierz miernikiem napięcie na ogniwach (B+ i B−) i wpisz je tutaj</small></div>
+      <div><input class="inp" id="batMeas" type="number" step="0.01" placeholder="np. 3.92" style="width:8rem"> <button class="btn" id="btnBatCal">Zapisz</button></div></div>
+    <p class="note" id="batMsg"></p>
 
     <h3>Ekran i dźwięk</h3>
     <div class="row"><div>Motyw</div><div class="seg" id="segTheme"><button data-v="auto">auto</button><button data-v="dark">ciemny</button><button data-v="light">jasny</button></div></div>
@@ -568,6 +587,7 @@ function handleEvents(d){
   }
   if (d.ev !== S.lastEv){
     if ((d.st === 'done' || d.st === 'fault') && S.prevSt !== d.st) showAlarm(d, true);
+    else if (/^Akumulator/.test(d.evt)){ toast(d.evt); chime(); }
     else if (/osiągnęła/.test(d.evt)){ toast(d.evt.replace(/Sonda S(\d)/, function(_, n){ return S.names[n - 1]; })); chime(); }
     S.lastEv = d.ev;
   }
@@ -589,6 +609,33 @@ function etaMin(i, t, tg){
   return (tg - t) / slope;
 }
 
+/* ---------- akumulator ---------- */
+function fmtV(v){ return v.toFixed(2).replace('.', ',') + ' V'; }
+function renderBat(b){
+  var c = $('#bat');
+  c.hidden = !b; $('#app').classList.toggle('has-bat', !!b);
+  if (b){
+    c.setAttribute('data-s', b.pct <= 10 ? 'crit' : (b.pct <= 20 ? 'low' : 'ok'));
+    $('#batTxt').textContent = b.pct + '%';
+    $('#batFill').setAttribute('width', Math.max(1.2, 16.6 * b.pct / 100).toFixed(1));
+    c.title = 'Akumulator ' + b.pct + '% (' + fmtV(b.v) + ')';
+  }
+  $('#batSetVal').textContent = b ? b.pct + '%' : '—';
+  $('#batInfo').textContent = b ? ('napięcie ogniw ' + fmtV(b.v) + (b.v >= 4.1 ? ' · pełny albo w trakcie ładowania' : ''))
+    : 'nie wykryto – dzielnik napięcia podłącza się do GPIO39 (VN), schemat w instrukcji';
+  $('#btnBatCal').disabled = !b; $('#batMeas').disabled = !b;
+}
+$('#btnBatCal').onclick = function(){
+  var v = parseFloat(String($('#batMeas').value).replace(',', '.'));
+  if (!S.d || !S.d.bat){ $('#batMsg').textContent = 'Sterownik nie widzi akumulatora.'; return; }
+  if (isNaN(v) || v < 2.8 || v > 4.4){ $('#batMsg').textContent = 'Wpisz napięcie od 2,8 do 4,4 V.'; return; }
+  api('/api/set?batv=' + v.toFixed(3)).then(function(d){
+    if (d && d.k){ S.d = d; render(); }
+    $('#batMeas').value = '';
+    $('#batMsg').textContent = 'Zapisano ' + fmtV(v) + '. Wskazanie wyrówna się w ciągu kilkunastu sekund.';
+  }, function(){ $('#batMsg').textContent = 'Brak połączenia ze sterownikiem'; });
+};
+
 /* ---------- rysowanie stanu ---------- */
 var ST_TXT = {idle: 'Czeka', run: 'Wędzenie', done: 'Zakończone', fault: 'Awaria'};
 var ERR_TXT = ['', 'brak sondy', 'zwarcie', 'poza zakresem'];
@@ -599,6 +646,8 @@ function render(){
   conn.querySelector('.t').textContent = S.active && !stale ? (d && d.wifi && d.wifi.ap && !d.wifi.sta ? 'Sieć ESP32' : 'Połączono') : (S.lastOk ? 'Brak połączenia' : 'Szukam sterownika…');
   $('#app').classList.toggle('stale', !!stale);
   if (!d) return;
+
+  renderBat(d.bat);
 
   var sc = $('#stateChip');
   sc.setAttribute('data-st', d.st);
@@ -830,6 +879,7 @@ function openSettings(){
   S.names.forEach(function(n, i){ nh += '<label>S' + (i + 1) + '<input class="inp w" data-name="' + i + '" value="' + esc(n) + '" maxlength="20"></label>'; });
   $('#names').innerHTML = nh;
   $('#calMsg').textContent = '';
+  $('#batMsg').textContent = ''; renderBat(d ? d.bat : null);
   $('#mSettings').hidden = false;
   loadCal(); clearInterval(calTimer); calTimer = setInterval(loadCal, 2000);
 }

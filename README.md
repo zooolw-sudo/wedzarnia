@@ -27,6 +27,8 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 | Termik bezpieczeństwa NC, ok. 130 °C | 1 | na prąd grzałki, montowany w komorze |
 | Wyłącznik nadprądowy B10 | 1 | dla grzałki do 2 kW |
 | Zasilacz 230 V → 5 V, min. 1 A | 1 | np. HLK-5M05 albo ładowarka USB |
+| *Opcjonalnie:* ogniwa 18650 + moduł ładowania 5 V | 2 + 1 | podtrzymanie przy zaniku prądu, np. IP5306 |
+| *Opcjonalnie:* rezystory 100 kΩ 1% + kondensator 100 nF | 2 + 1 | pomiar poziomu akumulatora |
 
 ## Podłączenie
 
@@ -45,6 +47,7 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 | K (komora) | GPIO36 (VP) |
 | Sterownik SSR | GPIO26 |
 | Zasilanie | VIN (5 V), GND |
+| Akumulator (opcjonalnie) | GPIO39 (VN) przez dzielnik 100k/100k |
 
 **Kanał sondy (5×):** 3V3 → 4,7 kΩ → pin ESP32 → sonda → GND, kondensator 100 nF między pinem a GND.
 
@@ -53,6 +56,14 @@ Sterowanie odbywa się w ESP32. Tablet tylko wyświetla i zmienia ustawienia, wi
 **230 V:** L → wyłącznik B10 → termik NC → SSR 1 → SSR 2 → grzałka → N. Zasilacz 5 V za wyłącznikiem, przed termikiem. Obudowa wędzarni do PE.
 
 Termik jest konieczny. Uszkodzony SSR zwykle zwiera na stałe, a wtedy tylko termik wyłączy grzałkę.
+
+### Akumulator i pomiar baterii (opcjonalnie)
+
+![Schemat 4: zasilanie z akumulatora i pomiar baterii](docs/schemat-4-akumulator.png)
+
+Dwa ogniwa 18650 3200 mAh połączone równolegle wystarczą na ok. 20 h pracy sterownika (ok. 150 mA przy 5 V). Akumulator zasila tylko elektronikę: grzałka 230 V przy zaniku prądu i tak nie grzeje, ale sondy dalej mierzą, a tablet pokazuje temperatury. Zanik prądu dłuższy niż 20 min w trakcie wędzenia kończy się awarią „komora się nie nagrzewa”.
+
+**Pomiar:** B+ ogniw → 100 kΩ → GPIO39 (VN) → 100 kΩ → GND, 100 nF między VN a GND. Na płytce VN nie jest połączony, więc elementy przylutuj od spodu do pola gniazda U1 (4. pin rzędu A, licząc od 3V3; GND to 14. pin tego rzędu). Aplikacja pokazuje wtedy poziom w nagłówku, a w ustawieniach napięcie i kalibrację (wpisz napięcie zmierzone miernikiem na ogniwach). Przy 20% i 10% tablet daje ostrzeżenie. Bez dzielnika wskaźnik baterii się nie pokazuje. W trakcie ładowania procent jest zawyżony, bo napięcie ogniw jest wtedy wyższe.
 
 ### Dobór rezystora
 
@@ -95,10 +106,11 @@ Każda sonda dostaje własną krzywą. Zamiast 0/100 °C możesz wpisać tempera
 
 | Adres | Opis |
 |---|---|
-| `GET /api/state` | stan: temperatury, nastawy, grzałka, WiFi |
+| `GET /api/state` | stan: temperatury, nastawy, grzałka, akumulator (`bat`: napięcie i %, `null` = brak), WiFi |
 | `GET /api/history` | wykres: punkt co minutę (temperatury ×10, % pracy grzałki) |
 | `POST /api/cmd?do=start\|stop\|ack` | start, stop, potwierdzenie końca/awarii |
 | `POST /api/set?k=75&h=2&t1=68&…&end=0&maxmin=720&kmax=140` | nastawy |
 | `POST /api/cal?t=100` | punkt kalibracji (wszystkie sondy) |
+| `POST /api/set?batv=3.92` | kalibracja napięcia akumulatora (`batv=0` kasuje) |
 | `GET /` | prosty podgląd w przeglądarce |
 | `GET /wifi` | ustawienia WiFi |

@@ -9,6 +9,7 @@
     K (komora)     -> GPIO36 (VP)
     każdy kanał:   3V3 -> 4,7 kΩ -> pin -> sonda -> GND, 100 nF pin–GND
     SSR            -> GPIO26 -> 1 kΩ -> baza BC547 (10 kΩ baza–GND), kolektor -> SSR 4−, SSR 3+ -> 5V
+    akumulator     -> (opcjonalnie) B+ ogniw -> 100 kΩ -> GPIO39 (VN) -> 100 kΩ -> GND, 100 nF VN–GND
 
   Biblioteki: tylko wbudowane w pakiet ESP32 (WiFi, WebServer, ESPmDNS, Preferences).
   Płytka w Arduino IDE: „ESP32 Dev Module”.
@@ -35,6 +36,8 @@ static const uint8_t PIN_PROBE[5] = {32, 33, 34, 35, 36};  // S1..S4, K
 static const uint8_t PIN_HEATER = 26;   // wejście sterownika SSR (stan wysoki = grzałka ON)
 static const uint8_t PIN_LED = 2;       // dioda na płytce: świeci = grzałka ON, miga = brak WiFi
 static const uint8_t PIN_BOOT = 0;      // przycisk BOOT: przytrzymaj 5 s = konfiguracja WiFi od nowa
+static const uint8_t PIN_BAT = 39;      // VN: napięcie akumulatora przez dzielnik 100k/100k (opcjonalnie)
+static const float BAT_DIV = 2.0f;      // (R górny + R dolny) / R dolny
 
 static const float R_FIX = 4700.0f;     // rezystor dzielnika (ok. połowa rezystancji sondy w 25 °C)
 // domyślna krzywa sondy przed kalibracją: NTC 10 kΩ w 25 °C, B = 3435
@@ -106,6 +109,10 @@ uint32_t lastHistMs = 0;
 uint16_t minuteSec = 0, minuteOnSec = 0;
 
 // WiFi
+// akumulator (opcjonalny): NAN = nie wykryto
+float batV = NAN, batK = 1.0f;
+uint8_t batPct = 0, batBadCnt = 0, batWarned = 100;
+
 String wifiSsid, wifiPass;
 bool staOk = false, apOn = false;
 uint32_t staLostMs = 0, apOffAtMs = 0;
@@ -147,6 +154,8 @@ static void loadCfg() {
   }
   cfg.endMode = prefs.getUChar("end", cfg.endMode);
   cfg.maxMin = prefs.getUShort("maxMin", cfg.maxMin);
+  batK = prefs.getFloat("batK", 1.0f);
+  if (!(batK > 0.85f && batK < 1.15f)) batK = 1.0f;
   prefs.end();
 
   prefs.begin("cal", true);
@@ -172,6 +181,7 @@ static void saveCfg() {
   }
   prefs.putUChar("end", cfg.endMode);
   prefs.putUShort("maxMin", cfg.maxMin);
+  prefs.putFloat("batK", batK);
   prefs.end();
 }
 
@@ -223,6 +233,44 @@ static void readProbes() {
       p.r = (e == 3) ? R_FIX * v / (VCC - v) : NAN;
     }
   }
+}
+
+// ================== AKUMULATOR ==================
+// Napięcie ogniwa Li-ion pod obciążeniem sterownika (ok. 150 mA) -> procent naładowania
+static const float BAT_V[] = {3.30f, 3.45f, 3.54f, 3.61f, 3.66f, 3.70f, 3.73f, 3.76f, 3.79f, 3.82f, 3.87f, 3.93f, 4.00f, 4.10f, 4.18f};
+static const uint8_t BAT_P[] = {0, 3, 6, 11, 18, 26, 34, 42, 50, 58, 66, 74, 82, 92, 100};
+
+static uint8_t batPercent(float v) {
+  const int n = sizeof(BAT_V) / sizeof(BAT_V[0]);
+  if (v <= BAT_V[0]) return 0;
+  if (v >= BAT_V[n - 1]) return 100;
+  for (int i = 1; i < n; i++) {
+    if (v < BAT_V[i]) return (uint8_t)lroundf(BAT_P[i - 1] + (BAT_P[i] - BAT_P[i - 1]) * (v - BAT_V[i - 1]) / (BAT_V[i] - BAT_V[i - 1]));
+  }
+  return 100;
+}
+
+// co 1 s; brak dzielnika albo odłączony akumulator = batV NAN (aplikacja chowa wskaźnik)
+static void readBattery() {
+  uint32_t sum = 0, mn = UINT32_MAX, mx = 0;
+  for (int s = 0; s < 32; s++) {
+    uint32_t m = analogReadMilliVolts(PIN_BAT);
+    sum += m; if (m < mn) mn = m; if (m > mx) mx = m;
+  }
+  float v = sum / 32.0f / 1000.0f * BAT_DIV * batK;
+  float spread = (mx - mn) / 1000.0f * BAT_DIV;
+  if (v < 2.8f || v > 4.6f || spread > 0.4f) {     // 0 V = brak akumulatora, skaczący odczyt = wolne wejście
+    if (batBadCnt < 10) batBadCnt++;
+    if (batBadCnt >= 5) { batV = NAN; batWarned = 100; }
+    return;
+  }
+  batBadCnt = 0;
+  batV = isnan(batV) ? v : batV + 0.05f * (v - batV);   // uśrednianie ok. 20 s
+  batPct = batPercent(batV);
+  // ostrzeżenia przy 20% i 10% (jedno na próg, od nowa po naładowaniu powyżej 30%)
+  if (batPct > 30) batWarned = 100;
+  else if (batPct <= 10 && batWarned > 10) { batWarned = 10; event("Akumulator: zostało %u%% – podłącz zasilanie", batPct); }
+  else if (batPct <= 20 && batWarned > 20) { batWarned = 20; event("Akumulator: zostało %u%%", batPct); }
 }
 
 // ================== HISTORIA ==================
@@ -374,6 +422,8 @@ static void buildState() {
   J("{\"v\":1,\"st\":\"%s\",\"msg\":", STATE_NAME[st]); Jstr(msg);
   J(",\"heat\":%d,\"run\":%lu,\"up\":%lu", heater ? 1 : 0, (unsigned long)runSeconds(), (unsigned long)(millis() / 1000UL));
   J(",\"end\":%u,\"maxMin\":%u,\"ev\":%lu,\"evt\":", cfg.endMode, cfg.maxMin, (unsigned long)evNo); Jstr(evTxt);
+  if (isnan(batV)) J(",\"bat\":null");
+  else { J(",\"bat\":{\"v\":"); Jf(batV, "%.2f"); J(",\"pct\":%u}", batPct); }
   J(",\"k\":{\"t\":"); Jf(k.t);
   J(",\"err\":%u,\"set\":", k.err); Jf(cfg.kSet);
   J(",\"hyst\":"); Jf(cfg.hyst);
@@ -466,6 +516,15 @@ static void handleSet() {
     }
   }
   if (cfg.kMax < cfg.kSet + 10) cfg.kMax = cfg.kSet + 10;
+  // kalibracja akumulatora: /api/set?batv=3.95 (napięcie zmierzone miernikiem), batv=0 = bez poprawki
+  if (server.hasArg("batv")) {
+    float m = server.arg("batv").toFloat();
+    if (m <= 0) batK = 1.0f;
+    else if (!isnan(batV) && m > 2.8f && m < 4.4f) batK = clampf(batK * m / batV, 0.85f, 1.15f);
+    batV = NAN;           // nowa średnia od następnego odczytu
+    any = true;
+    readBattery();
+  }
   if (any) saveCfg();
   buildState();
   sendJb();
@@ -555,7 +614,7 @@ const N=['S1','S2','S3','S4'];
 function f(t){return t==null?'—':t.toFixed(1)+' °C'}
 async function u(){try{const d=await(await fetch('/api/state')).json();
 const st={idle:'Czeka',run:'Wędzenie trwa',done:'Zakończone',fault:'Awaria'}[d.st];
-document.getElementById('s').textContent=st+(d.msg?' – '+d.msg:'')+' · grzałka '+(d.heat?'WŁ':'WYŁ');
+document.getElementById('s').textContent=st+(d.msg?' – '+d.msg:'')+' · grzałka '+(d.heat?'WŁ':'WYŁ')+(d.bat?' · akumulator '+d.bat.pct+'% ('+d.bat.v.toFixed(2)+' V)':'');
 let h='<div class="c"><div class="m">Komora (zadana '+d.k.set+' °C)</div><div class="t">'+f(d.k.t)+'</div></div>';
 d.p.forEach((p,i)=>{h+='<div class="c"><div class="m">'+N[i]+' (cel '+(p.tg>0?p.tg+' °C':'—')+')</div><div class="t">'+f(p.t)+'</div></div>'});
 document.getElementById('g').innerHTML=h;}catch(e){document.getElementById('s').textContent='Brak połączenia'}}
@@ -699,6 +758,7 @@ void setup() {
 
   loadCfg();
   for (int i = 0; i < 6; i++) { readProbes(); delay(20); }
+  readBattery();
   histClear();
   lastHistMs = millis();
   histPush();
@@ -727,7 +787,7 @@ void loop() {
   server.handleClient();
 
   if (now - tRead >= 500) { tRead = now; readProbes(); }
-  if (now - tCtl >= 1000) { tCtl = now; control1s(); wifiLoop(); }
+  if (now - tCtl >= 1000) { tCtl = now; control1s(); readBattery(); wifiLoop(); }
 
   // dioda: grzałka ON = świeci, brak WiFi = miga
   if (heater) digitalWrite(PIN_LED, HIGH);
@@ -751,7 +811,9 @@ void loop() {
 
   if (now - tLog >= 5000) {
     tLog = now;
-    Serial.printf("[%s] K=%.1f (zad. %.0f) S1=%.1f S2=%.1f S3=%.1f S4=%.1f grzałka=%s\n",
+    Serial.printf("[%s] K=%.1f (zad. %.0f) S1=%.1f S2=%.1f S3=%.1f S4=%.1f grzałka=%s",
                   STATE_NAME[st], pr[KI].t, cfg.kSet, pr[0].t, pr[1].t, pr[2].t, pr[3].t, heater ? "WŁ" : "WYŁ");
+    if (isnan(batV)) Serial.println();
+    else Serial.printf(" akumulator=%.2f V (%u%%)\n", batV, batPct);
   }
 }
