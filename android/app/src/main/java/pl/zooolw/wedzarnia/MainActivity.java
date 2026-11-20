@@ -2,6 +2,9 @@ package pl.zooolw.wedzarnia;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -12,6 +15,7 @@ import android.net.nsd.NsdServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -21,7 +25,10 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.TextView;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.InetAddress;
 
 /**
@@ -46,19 +53,34 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(0xFF151C2B);
-        getWindow().setNavigationBarColor(0xFF0D121B);
+        installCrashLog();
+        final String lastCrash = getSharedPreferences("crash", MODE_PRIVATE).getString("text", null);
+        if (lastCrash != null) {
+            // po awarii startujemy bez pełnego ekranu, żeby nic nie przeszkodziło w uruchomieniu
+            getSharedPreferences("crash", MODE_PRIVATE).edit().remove("text").commit();
+            getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("fullscreen", false).commit();
+        }
+        try {
+            getWindow().setStatusBarColor(0xFF151C2B);
+            getWindow().setNavigationBarColor(0xFF0D121B);
+        } catch (Exception ignored) { }
         fullscreen = getSharedPreferences("ui", MODE_PRIVATE).getBoolean("fullscreen", true);
         keepOn = getSharedPreferences("ui", MODE_PRIVATE).getBoolean("keepOn", true);
         foundHost = getSharedPreferences("ui", MODE_PRIVATE).getString("foundHost", "");
         // tablet (najmniejszy bok co najmniej 600 dp) trzymamy poziomo; telefon obraca się swobodnie
-        if (getResources().getConfiguration().smallestScreenWidthDp >= 600) {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
-        }
-        applyFullscreen();
-        applyKeepOn();
+        try {
+            if (getResources().getConfiguration().smallestScreenWidthDp >= 600) {
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            }
+        } catch (Exception ignored) { }
 
-        web = new WebView(this);
+        try {
+            web = new WebView(this);
+        } catch (Throwable e) {
+            // brak albo wyłączony składnik Android System WebView
+            showMessage("Nie można uruchomić ekranu aplikacji.\n\nZaktualizuj albo włącz „Android System WebView” i „Chrome” w Sklepie Play, potem otwórz Wędzarnię ponownie.\n\n" + e);
+            return;
+        }
         web.setBackgroundColor(0xFF0D121B);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -80,7 +102,67 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(web);
+        // pełny ekran i podświetlenie dopiero po utworzeniu okna (Android 11+ wymaga gotowego widoku)
+        applyFullscreen();
+        applyKeepOn();
         web.loadUrl("file:///android_asset/index.html");
+        if (lastCrash != null) showCrash(lastCrash);
+    }
+
+    // ---------- zapis awarii: przy następnym uruchomieniu aplikacja pokaże, co się stało ----------
+
+    private void installCrashLog() {
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        if (prev instanceof CrashLog) return;
+        Thread.setDefaultUncaughtExceptionHandler(new CrashLog(prev));
+    }
+
+    private class CrashLog implements Thread.UncaughtExceptionHandler {
+        private final Thread.UncaughtExceptionHandler prev;
+        CrashLog(Thread.UncaughtExceptionHandler prev) { this.prev = prev; }
+
+        @Override
+        public void uncaughtException(Thread th, Throwable e) {
+            try {
+                StringWriter sw = new StringWriter();
+                e.printStackTrace(new PrintWriter(sw));
+                String ver = "";
+                try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+                String text = "Wędzarnia " + ver + " · " + Build.MANUFACTURER + " " + Build.MODEL
+                        + " · Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n\n" + sw;
+                if (text.length() > 6000) text = text.substring(0, 6000);
+                getSharedPreferences("crash", MODE_PRIVATE).edit().putString("text", text).commit();
+            } catch (Throwable ignored) { }
+            if (prev != null) prev.uncaughtException(th, e);
+        }
+    }
+
+    private void showCrash(final String text) {
+        try {
+            new AlertDialog.Builder(this)
+                    .setTitle("Aplikacja się wcześniej zamknęła")
+                    .setMessage("Zrób zrzut ekranu albo skopiuj ten opis i wyślij go Claude'owi.\n\n" + text)
+                    .setPositiveButton("Kopiuj", (d, w) -> {
+                        try {
+                            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(ClipData.newPlainText("Wędzarnia – błąd", text));
+                        } catch (Exception ignored) { }
+                    })
+                    .setNegativeButton("Zamknij", null)
+                    .show();
+        } catch (Exception ignored) { }
+    }
+
+    private void showMessage(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(0xFFE7EBF2);
+        tv.setBackgroundColor(0xFF0D121B);
+        tv.setTextSize(18);
+        tv.setGravity(Gravity.CENTER);
+        int p = (int) (24 * getResources().getDisplayMetrics().density);
+        tv.setPadding(p, p, p, p);
+        setContentView(tv);
     }
 
     /** Most między stroną a aplikacją. */
@@ -229,18 +311,30 @@ public class MainActivity extends Activity {
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
+        if (web == null) { super.onWindowFocusChanged(hasFocus); return; }
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) applyFullscreen();
     }
 
     private void applyKeepOn() {
-        if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        try {
+            if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } catch (Exception ignored) { }
+    }
+
+    private void applyFullscreen() {
+        try {
+            applyFullscreenUnsafe();
+        } catch (Exception ignored) {
+            // pełny ekran to tylko wygoda: jeśli system go odrzuci, aplikacja działa dalej z paskami
+        }
     }
 
     @SuppressWarnings("deprecation")
-    private void applyFullscreen() {
+    private void applyFullscreenUnsafe() {
         Window w = getWindow();
+        View decor = w.getDecorView();   // tworzy okno, zanim zapytamy o kontroler pasków
         boolean on = fullscreen;
         if (on) w.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         else w.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -253,7 +347,8 @@ public class MainActivity extends Activity {
         }
         if (Build.VERSION.SDK_INT >= 30) {
             w.setDecorFitsSystemWindows(!on);
-            WindowInsetsController c = w.getInsetsController();
+            WindowInsetsController c = decor.getWindowInsetsController();
+            if (c == null) c = w.getInsetsController();
             if (c != null) {
                 if (on) {
                     c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
@@ -263,8 +358,7 @@ public class MainActivity extends Activity {
                 }
             }
         } else {
-            View d = w.getDecorView();
-            d.setSystemUiVisibility(on
+            decor.setSystemUiVisibility(on
                     ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                       | View.SYSTEM_UI_FLAG_FULLSCREEN
                       | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
